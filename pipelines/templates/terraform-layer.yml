@@ -1,0 +1,85 @@
+parameters:
+- name: stageName
+  type: string
+- name: displayName
+  type: string
+- name: workingDirectory
+  type: string
+- name: stateKey
+  type: string
+- name: dependsOn
+  type: object
+  default: []
+
+stages:
+- stage: ${{ parameters.stageName }}_Plan
+  displayName: '${{ parameters.displayName }} - Plan'
+  dependsOn: ${{ parameters.dependsOn }}
+  jobs:
+  - job: plan
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: AzureCLI@2
+      displayName: Terraform init, validate and plan
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        workingDirectory: ${{ parameters.workingDirectory }}
+        inlineScript: |
+          set -euo pipefail
+          export ARM_USE_AZUREAD=true
+          export ARM_SUBSCRIPTION_ID=$(subscriptionId)
+          terraform init -reconfigure \
+            -backend-config="resource_group_name=$(tfstateResourceGroup)" \
+            -backend-config="storage_account_name=$(tfstateStorageAccount)" \
+            -backend-config="container_name=$(tfstateContainer)" \
+            -backend-config="key=${{ parameters.stateKey }}" \
+            -backend-config="use_azuread_auth=true"
+          terraform fmt -check -recursive
+          terraform validate
+          terraform plan -out=tfplan \
+            -var="subscription_id=$(subscriptionId)" \
+            -var="tfstate_resource_group_name=$(tfstateResourceGroup)" \
+            -var="tfstate_storage_account_name=$(tfstateStorageAccount)" \
+            -var="tfstate_container_name=$(tfstateContainer)"
+    - publish: '${{ parameters.workingDirectory }}/tfplan'
+      artifact: '${{ parameters.stageName }}-tfplan'
+
+- stage: ${{ parameters.stageName }}_Apply
+  displayName: '${{ parameters.displayName }} - Apply'
+  dependsOn: ${{ parameters.stageName }}_Plan
+  condition: succeeded()
+  jobs:
+  - deployment: apply
+    environment: 'lz-${{ lower(parameters.stageName) }}'
+    pool:
+      vmImage: ubuntu-latest
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - download: current
+            artifact: '${{ parameters.stageName }}-tfplan'
+          - task: AzureCLI@2
+            displayName: Terraform apply
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: ${{ parameters.workingDirectory }}
+              inlineScript: |
+                set -euo pipefail
+                export ARM_USE_AZUREAD=true
+                export ARM_SUBSCRIPTION_ID=$(subscriptionId)
+                terraform init -reconfigure \
+                  -backend-config="resource_group_name=$(tfstateResourceGroup)" \
+                  -backend-config="storage_account_name=$(tfstateStorageAccount)" \
+                  -backend-config="container_name=$(tfstateContainer)" \
+                  -backend-config="key=${{ parameters.stateKey }}" \
+                  -backend-config="use_azuread_auth=true"
+                cp "$(Pipeline.Workspace)/${{ parameters.stageName }}-tfplan/tfplan" ./tfplan
+                terraform apply -auto-approve tfplan

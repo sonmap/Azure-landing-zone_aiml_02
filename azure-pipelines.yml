@@ -1,0 +1,86 @@
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - landingzones/**
+    - modules/**
+    - pipelines/**
+    - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+    - main
+
+variables:
+- group: vg-aiml-landing-zone
+
+stages:
+- stage: Bootstrap_00
+  displayName: '00 - Bootstrap Terraform Backend'
+  jobs:
+  - deployment: bootstrap
+    environment: lz-bootstrap
+    pool:
+      vmImage: ubuntu-latest
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: landingzones/00-bootstrap
+              inlineScript: |
+                set -euo pipefail
+                export ARM_SUBSCRIPTION_ID=$(subscriptionId)
+                terraform init
+                terraform fmt -check
+                terraform validate
+                terraform apply -auto-approve \
+                  -var="subscription_id=$(subscriptionId)" \
+                  -var="location=$(location)" \
+                  -var="tfstate_resource_group_name=$(tfstateResourceGroup)" \
+                  -var="tfstate_storage_account_name=$(tfstateStorageAccount)" \
+                  -var="tfstate_container_name=$(tfstateContainer)"
+
+- template: pipelines/templates/terraform-layer.yml
+  parameters:
+    stageName: Network_10
+    displayName: '10 - Hub Network'
+    workingDirectory: landingzones/10-network
+    stateKey: 10-network.tfstate
+    dependsOn:
+    - Bootstrap_00
+
+- template: pipelines/templates/terraform-layer.yml
+  parameters:
+    stageName: Spoke_20
+    displayName: '20 - Spoke Network'
+    workingDirectory: landingzones/20-spoke
+    stateKey: 20-spoke.tfstate
+    dependsOn:
+    - Network_10_Apply
+
+- template: pipelines/templates/terraform-layer.yml
+  parameters:
+    stageName: Platform_30
+    displayName: '30 - Shared Platform'
+    workingDirectory: landingzones/30-platform
+    stateKey: 30-platform.tfstate
+    dependsOn:
+    - Spoke_20_Apply
+
+- template: pipelines/templates/terraform-layer.yml
+  parameters:
+    stageName: Workload_40
+    displayName: '40 - AI/ML Workload'
+    workingDirectory: landingzones/40-workload
+    stateKey: 40-workload.tfstate
+    dependsOn:
+    - Platform_30_Apply
