@@ -1,0 +1,12 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "koreacentral"
+environment     = "dev"
+project_name    = "aiml-lz"
+address_space   = ["10.40.0.0/16"]
+
+tags = {
+  workload    = "ai-ml"
+  managed_by  = "terraform"
+  environment = "dev"
+  owner        = "cloud-platform"
+}
